@@ -1,4 +1,0 @@
-INPUT
-a0,a1:bool;
-PTSPEC
-a1 && O[5,7]a0;

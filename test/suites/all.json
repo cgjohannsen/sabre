@@ -1,4 +1,0 @@
-{
-    "suite": "ft_subset",
-    "suites": ["cav", "ft_subset", "long_trace", "regression"]
-}

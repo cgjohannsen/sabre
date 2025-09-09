@@ -1,4 +1,0 @@
-INPUT
-a0,a1:bool;
-FTSPEC
-G[2] a1;

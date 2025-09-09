@@ -1,5 +1,0 @@
-INPUT
-    b0,b1: bool;
-
-FTSPEC
-    contract: b0 => b1;
