@@ -16,10 +16,18 @@ def hexlit(value: int, word_size: int) -> str:
 def line(s: str, indent: int = 0) -> str:
     return f"{TAB*indent}{s}\n"
 
-def gen_code(formula: cpt.Expression, context: cpt.Context, word_size: int, nsigs: int, decompose: bool = True) -> str:
+def gen_code(formula: cpt.Expression, context: cpt.Context) -> str:
+    word_size = context.options.sabre_word_size
+    nsigs = context.options.sabre_nsigs
+    decompose = context.options.sabre_decompose
+    raw_bytes = context.options.sabre_raw_bytes
+
+    # if nsigs is not provided, infer it from the spec
+    if nsigs == -1:
+        nsigs = len(context.signals)
 
     if word_size not in [8, 16, 32, 64]:
-        raise ValueError("word_size must be 8, 16, 32, or 64")
+        raise ValueError("Word size must be 8, 16, 32, or 64")
     
     def gen_compute_expr_code_func(
             expr: cpt.Expression,
@@ -31,6 +39,11 @@ def gen_code(formula: cpt.Expression, context: cpt.Context, word_size: int, nsig
             indent: int = 2,
         ) -> str:
         nonlocal word_size
+        # check is expr is true/false
+        if isinstance(expr, cpt.Constant) and expr.value in [True, False]:
+            return line(
+                f"{fid[expr]}[({tau} - {word_wpd[expr]}) % {size[expr]}] = {int(expr.value)};", indent
+            )
         if cpt.is_operator(expr, cpt.OperatorKind.LOGICAL_NEGATE):
             return line(
                 f"{fid[expr]}[({tau} - {word_wpd[expr]}) % {size[expr]}] = "
@@ -121,6 +134,7 @@ def gen_code(formula: cpt.Expression, context: cpt.Context, word_size: int, nsig
     code = f"""#include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <unistd.h>
 {'#include <sys/time.h>' if PROFILE else ''}
 """
 
@@ -193,8 +207,6 @@ uint{word_size}_t future(uint{word_size}_t *a, uint{word_size}_t *buf, uint64_t 
         }}
     }}
 
-    // Check if there is a leftover shift amount
-    // j is the largest power of two less than the interval size
     if (((ub - lb + 1) & (j - 1)) != 0) {{
         uint64_t leftover_shift = (ub - lb + 1) & (j - 1);
         for(i = 0; i < nbuf; ++i) {{ 
@@ -232,8 +244,6 @@ uint{word_size}_t global(uint{word_size}_t *a, uint{word_size}_t *buf, uint64_t 
         }}
     }}
 
-    // Check if there is a leftover shift amount
-    // j is the largest power of two less than the interval size
     if (((ub - lb + 1) & (j - 1)) != 0) {{
         uint64_t leftover_shift = (ub - lb + 1) & (j - 1);
         for(i = 0; i < nbuf; ++i) {{ 
@@ -280,8 +290,6 @@ uint{word_size}_t until(uint{word_size}_t *a1, uint{word_size}_t *a2, uint{word_
         }}
     }}
 
-    // Check if there is a leftover shift amount
-    // j is the largest power of two less than the interval size
     if (((ub - lb + 1) & (j - 1)) != 0) {{
         uint64_t leftover_shift = (ub - lb + 1) & (j - 1);
         for(i = 0; i < nbuf; ++i) {{ 
@@ -301,32 +309,14 @@ uint{word_size}_t until(uint{word_size}_t *a1, uint{word_size}_t *a2, uint{word_
     code += """
 int main(int argc, char const *argv[]) 
 {
-    FILE *f;
-    if (argc == 1) {
-        f = stdin;
-    } else if (argc == 2) {
-        f = fopen(argv[1], "r");
-        if (f == NULL) {
-            fprintf(stderr, "failed to open file '%s'\\n", argv[1]);
-            return 1; 
-        }
-    } else {
-        fprintf(stderr, "usage: %s [trace-file]\\n", argv[0]);
-        return 1;
-    }
-
 """
 
-    # for aid in range(nsigs):
-    #     signal = f"a{aid}"
-    #     sigsize[signal] = 1 << (word_wpd[formula]).bit_length()
-    #     code += f"{TAB}uint{word_size}_t {signal}[{sigsize[signal]}] = {{0}};\n"
     code += line(f"uint{word_size}_t atomics[{nsigs}][{size[formula]}] = {{0}};", 1)
 
     for expr in cpt.postorder(formula, context):
         if isinstance(expr, cpt.Signal):
             continue
-        code += line(f"uint{word_size}_t {fid[expr]}[{size[expr]}] = {{0}}; // {expr}", 1)
+        code += line(f"uint{word_size}_t {fid[expr]}[{size[expr]}] = {{0}};", 1)
     code += "\n"
 
     for expr in cpt.postorder(formula, context):
@@ -346,14 +336,34 @@ int main(int argc, char const *argv[])
     uint64_t i, word = 0;
     int abuf[{nsigs}];
     {f'struct timeval stop[{size[formula]}], start[{size[formula]}];' if PROFILE else ''}
-    while(1) {{
-        for (int i = 0; i < {word_size}; ++i) {{
-            if(fscanf(f, "{','.join(['%d' for _ in range(nsigs)])}\\n", {', '.join([f'&abuf[{i}]' for i in range(nsigs)])}) != {nsigs}) {{
+    while(1) {{"""
+
+    if raw_bytes:
+        # In raw bytes mode, we read the input as a stream of bytes, with each signal providing one word at a time. 
+        # For example, if there are 2 signals and the word size is 8, the input would be a stream of words like:
+        # 0x01 0x02 0x03 0x04 0x05 0x06 0x07 0x08
+        # This would be interpreted as:
+        #   T=0: a0 = 0x01, a1 = 0x02
+        #   T=1: a0 = 0x03, a1 = 0x04
+        #   T=2: a0 = 0x05, a1 = 0x06
+        #   T=3: a0 = 0x07, a1 = 0x08
+        code += f"""
+        for (int i = 0; i < {nsigs}; ++i) {{
+            if(read(STDIN_FILENO, &atomics[i][word % {size[formula]}], {word_size // 8}) != {word_size // 8}) {{
                 return 0;
             }}
-            """ + f'\n{TAB*3}'.join([f'atomics[{i}][word % {size[formula]}] = (atomics[{i}][word % {size[formula]}] << 1) | (abuf[{i}] == 1);' for i in range(nsigs)]) + """
+        }}
+    """
+    else:
+        code += (f"""
+        for (int i = 0; i < {word_size}; ++i) {{
+            if(fscanf(stdin, "{','.join(['%d' for _ in range(nsigs)])}\\n", {', '.join([f'&abuf[{i}]' for i in range(nsigs)])}) != {nsigs}) {{
+                return 0;
+            }}
+            """ + 
+            f'\n{TAB*3}'.join([f'atomics[{i}][word % {size[formula]}] = (atomics[{i}][word % {size[formula]}] << 1) | (abuf[{i}] == 1);' for i in range(nsigs)]) + """
         }
-"""
+    """)
 
     if PROFILE:
          code += line(f"gettimeofday(&start[word % {size[formula]}], NULL);", 0)
@@ -361,7 +371,7 @@ int main(int argc, char const *argv[])
     for expr in cpt.postorder(formula, context):
         if isinstance(expr, cpt.Signal):
             continue
-        code += gen_compute_expr_code_func(expr, fid, size, word_wpd, buffer_size, "word")
+        code += gen_compute_expr_code_func(expr, fid, size, word_wpd, buffer_size, "word", 1)
         # if debug:
         #     code += "#ifdef DEBUG\n"
         #     code += (

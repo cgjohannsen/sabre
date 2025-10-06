@@ -1,0 +1,7 @@
+traces/
+results/
+*.c
+*.txt
+*.png
+*.mtl
+sabre*

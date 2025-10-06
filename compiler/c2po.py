@@ -258,8 +258,9 @@ parser.add_argument(
 
 parser.add_argument("--sabre", action="store_true", help="sabre mode")
 parser.add_argument("--sabre-word-size", type=int, default=c2po.options.DEFAULTS["sabre_word_size"], help="sabre word size")
-parser.add_argument("--sabre-nsigs", type=int, help="number of signals in sabre encoding")
+parser.add_argument("--sabre-nsigs", type=int, default=c2po.options.DEFAULTS["sabre_nsigs"], help="number of signals in sabre encoding")
 parser.add_argument("--sabre-decompose", action="store_true", help="sabre decompose mode")
+parser.add_argument("--sabre-raw-bytes", action="store_true", help="sabre raw bytes input mode")
 
 args = parser.parse_args()
 
@@ -310,6 +311,7 @@ opts = c2po.options.Options(
     sabre_word_size=args.sabre_word_size,
     sabre_nsigs=args.sabre_nsigs,
     sabre_decompose=args.sabre_decompose,
+    sabre_raw_bytes=args.sabre_raw_bytes,
 )
 
 return_code = c2po.main.main(opts)

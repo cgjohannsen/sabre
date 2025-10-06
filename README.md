@@ -7,17 +7,13 @@ data and outputs whether MLTL formula is satisfied at each point of the input st
 
 # Example
 
-First, generate the SABRe monitor using C2PO:
+First, generate the SABRe monitor using the provided `compile.sh` script:
 
-    $ python3 compiler/c2po.py --sabre --sabre-nsigs 2 example/spec.mltl > example/sabre.c
-
-Then compile the SABRe monitor:
-
-    $ gcc -o example/sabre example/sabre.c
+    $ bash compile.sh example/spec.mltl sabre
 
 Then execute the monitor over the example trace:
     
-    $ ./example/sabre < example/trace.csv
+    $ ./sabre < example/trace.csv
 
 The output is in raw bytes where each bit denotes whether the formula was true at that bit's index
 of the trace:
@@ -32,3 +28,10 @@ Interpreting these as raw bytes this is the same as:
 
 Which means that the formula was true from times 0 through 7 (first line) and again from 8 through 9
 and false from 10 to 15 (second line).
+
+# Options
+
+The `compile.sh` script has a number of options, including setting the underlying word size and
+manually overriding the number of signals in the input trace. Run with `-h`/`--help` for the full
+set of options.
+

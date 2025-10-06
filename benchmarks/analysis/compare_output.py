@@ -1,18 +1,18 @@
 import sys
 
 if len(sys.argv) != 5:
-    print(f"usage: python3 {sys.argv[0]} <r2u2-output-file> <hydra-output-file> <sabre-output-file> <sabre-output-decomposed-file>")
+    print(f"usage: python3 {sys.argv[0]} <r2u2-output-file> <hydra-output-file> <sabre-output-file> <sabre-output-raw-file>")
     exit(1)
 
 r2u2_filename = sys.argv[1]
 hydra_filename = sys.argv[2]
 sabre_filename = sys.argv[3]
-sabre_decomposed_filename = sys.argv[4]
+sabre_raw_filename = sys.argv[4]
 
 r2u2_trace: list[bool] = []
 hydra_trace: list[bool] = []
 sabre_trace: list[bool] = []
-sabre_decomposed_trace: list[bool] = []
+sabre_raw_trace: list[bool] = []
 
 # For the following, assume we have the following reference trace of length 16 for the examples:
 # [T, T, T, T, F, F, F, F, F, F, F, F, T, T, T, T]
@@ -65,7 +65,7 @@ for line in content.split("\n"):
     hydra_trace.append(verdict == "true")
     cur_ts += 1
 
-# bvmon output format:
+# sabre output format:
 # (\x+\n)*
 # where \x is a hexadecimal digit.
 # Each bit of the sequence of hex digits represent the verdict at that time.
@@ -77,18 +77,23 @@ with open(sabre_filename, "r") as f:
         for hex_digit in line[:-1]:
             sabre_trace.extend([bit == "1" for bit in f"{int(hex_digit, 16):04b}"])
 
+with open(sabre_raw_filename, "r") as f:
+    for line in f.readlines():
+        for hex_digit in line[:-1]:
+            sabre_raw_trace.extend([bit == "1" for bit in f"{int(hex_digit, 16):04b}"])
+
 # print(f"R2U2 trace: {len(r2u2_trace)}")
 # print(f"Hydra trace: {len(hydra_trace)}")
 # print(f"BvMon trace: {len(bvmon_trace)}")
 
 status = 0
-for i in range(min(len(r2u2_trace), len(hydra_trace), len(sabre_trace), len(sabre_decomposed_trace))):
+for i in range(min(len(r2u2_trace), len(hydra_trace), len(sabre_trace), len(sabre_raw_trace))):
     r2u2 = r2u2_trace[i]
     hydra = hydra_trace[i]
     sabre = sabre_trace[i]
-    sabre_decomposed = sabre_decomposed_trace[i]    
-    if r2u2 != hydra or r2u2 != sabre or hydra != sabre or sabre != sabre_decomposed:
-        print(f"Discrepancy at timestamp {i}: R2U2={r2u2}, Hydra={hydra}, Sabre={sabre}, Sabre Decomposed={sabre_decomposed}")
+    sabre_raw = sabre_raw_trace[i]    
+    if r2u2 != hydra or r2u2 != sabre or hydra != sabre or sabre != sabre_raw:
+        print(f"Discrepancy at timestamp {i}: R2U2={r2u2}, Hydra={hydra}, Sabre={sabre}, Sabre Raw={sabre_raw}")
         status = 1
 
 sys.exit(status)

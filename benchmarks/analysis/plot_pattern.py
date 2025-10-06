@@ -41,6 +41,8 @@ for file in files:
                 tool = "SABRe (Decomposed)"
             elif tool == "sabre_64":
                 tool = "SABRe (64)"
+            elif tool == "sabre_raw":
+                tool = "SABRe (Raw)"
             elif tool == "hydra":
                 tool = "Hydra"
             elif tool == "r2u2_c":
@@ -59,7 +61,13 @@ fig, ax = plt.subplots(layout="tight", figsize=(6,3))
 
 # Prepare data for the bar graph
 specs = ["Future", "Until", "Min Duration", "Between", "Prec Chain"]
-tools = ["SABRe", "SABRe (Decomposed)", "SABRe (64)", "Hydra", "R2U2 (C)", "R2U2 (Rust)"]
+# Collect tools from results
+tools = []
+for spec in results:
+    for tool in results[spec]:
+        if tool not in tools:
+            tools.append(tool)
+
 bar_width = 0.25
 group_spacing = 0.3  # Add extra spacing between groups
 x = [i * (1 + group_spacing) for i in range(len(specs))]  # Add spacing between groups
@@ -85,6 +93,7 @@ for tool in tools:
             "darkorchid" if tool == "SABRe" else
             "magenta" if tool == "SABRe (Decomposed)" else
             "lime" if tool == "SABRe (64)" else
+            "purple" if tool == "SABRe (Raw)" else
             "gray"  # Default color for any other tool
         ),
         # hatch=(
@@ -110,4 +119,4 @@ plt.grid(axis="y")
 plt.tight_layout()
 
 # Save the plot
-plt.savefig(args.output, dpi=100)
+plt.savefig(args.output, dpi=300)
