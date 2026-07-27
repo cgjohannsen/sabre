@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # C2PO Wrapper Script
-# Usage: ./compile.sh <spec_file> <output_executable> [--nsigs <num_signals>] [--word-size <bits>] [--decompose] [--raw-bytes] [--cc <compiler>] [-h|--help]
+# Usage: ./compile.sh <spec_file> <output_executable> [--nsigs <num_signals>] [--word-size <bits>] [--decompose] [--raw-bytes] [--cc <compiler>] [--keep-c] [-h|--help]
 
 set -e
 
 # Function to display usage
 usage() {
-    echo "Usage: $0 <spec_file> <output_executable> [--nsigs <num_signals>] [--word-size <bits>] [--decompose] [--raw-bytes] [--cc <compiler>]"
+    echo "Usage: $0 <spec_file> <output_executable> [--nsigs <num_signals>] [--word-size <bits>] [--decompose] [--raw-bytes] [--cc <compiler>] [--keep-c]"
     echo ""
     echo "Arguments:"
     echo "  spec_file        Specification file (either .c2po or .mltl)"
@@ -15,11 +15,12 @@ usage() {
     echo ""
     echo "Optional flags:"
     echo "  -h, --help       Show this help message and exit"
-    echo "  --nsigs <n>      Number of signals (optional)"
-    echo "  --word-size <b>  Word size (8, 16, 32, or 64) (optional)"
-    echo "  --decompose      Enable sabre decompose mode"
+    echo "  --nsigs <n>      Manually-specified number of signals (optional) (default: inferred from spec)"
+    echo "  --word-size <b>  Word size (8, 16, 32, or 64) (optional) (default: 8)"
+    echo "  --decompose      Decompose temporal operators into power-of-two-sized intervals"
     echo "  --raw-bytes      Enable sabre raw bytes input mode"
     echo "  --cc <compiler>  C compiler to use (default: gcc)"
+    echo "  --keep-c         Keep the temporary C file (named as output with .c extension)"
     echo ""
     echo "Examples:"
     echo "  $0 spec.mltl monitor"
@@ -28,6 +29,7 @@ usage() {
     echo "  $0 spec.c2po monitor --nsigs 5 --word-size 16 --decompose"
     echo "  $0 spec.mltl monitor --nsigs 8 --word-size 64 --decompose --raw-bytes"
     echo "  $0 spec.mltl monitor --cc clang"
+    echo "  $0 spec.mltl monitor --keep-c"
     exit 1
 }
 
@@ -50,6 +52,7 @@ NUM_SIGNALS=""
 WORD_SIZE=""
 DECOMPOSE=false
 RAW_BYTES=false
+KEEP_C=false
 CC="gcc"
 
 # Shift to get remaining arguments
@@ -85,6 +88,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --raw-bytes)
             RAW_BYTES=true
+            shift
+            ;;
+        --keep-c)
+            KEEP_C=true
             shift
             ;;
         --cc)
@@ -172,7 +179,13 @@ fi
 COMMAND+=("$SPEC_FILE")
 
 # Create a temporary file to store the C output
-TEMP_C_FILE=$(mktemp).c
+if [ "$KEEP_C" = true ]; then
+    # Use the output executable name with .c extension
+    TEMP_C_FILE="${OUTPUT_EXECUTABLE}.c"
+else
+    # Use a temporary file
+    TEMP_C_FILE=$(mktemp).c
+fi
 C2PO_ERRORS=$(mktemp)
 
 if ! "${COMMAND[@]}" > "$TEMP_C_FILE" 2> "$C2PO_ERRORS"; then
@@ -187,11 +200,17 @@ if [ -s "$C2PO_ERRORS" ]; then
     echo ""
 fi
 
+# Compile the C program
 $CC -O3 -o "$OUTPUT_EXECUTABLE" "$TEMP_C_FILE"
 CC_EXIT_CODE=$?
 
-# Compile the C program directly from the temporary file
 if [ $CC_EXIT_CODE -ne 0 ]; then
     echo "Error: Compilation failed with exit code $CC_EXIT_CODE"
     exit 1
+fi
+
+# Clean up temporary files
+rm -f "$C2PO_ERRORS"
+if [ "$KEEP_C" = false ]; then
+    rm -f "$TEMP_C_FILE"
 fi

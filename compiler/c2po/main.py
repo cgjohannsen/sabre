@@ -112,10 +112,19 @@ def compile(opts: options.Options) -> ReturnCode:
             return ReturnCode.ERROR
     
     if opts.enable_sabre:
+        if opts.enable_booleanizer:
+            log.error(MODULE_CODE, "SABRe does not support Booleanizer (non-Boolean) operations.")
+            return ReturnCode.INVALID_INPUT
         passes.compute_accumulated_bounds(program, context)
+        if len(program.ft_spec_set.get_specs()) != 1:
+            log.error(MODULE_CODE, "SABRe only supports single-formula specifications")
+            return ReturnCode.INVALID_INPUT
         formula = program.ft_spec_set.get_specs()[0]
-        assert isinstance(formula, cpt.Formula) # FIXME: exit gracefully if this is not the case
-        sabre.gen_code(formula.get_expr(), context)
+        if not isinstance(formula, cpt.Formula):
+            log.error(MODULE_CODE, "SABRe does not support contracts.")
+            return ReturnCode.INVALID_INPUT
+        code = sabre.gen_code(formula.get_expr(), context)
+        print(code)
         return ReturnCode.SUCCESS
 
     if opts.only_compile:

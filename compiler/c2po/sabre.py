@@ -7,14 +7,191 @@ TAB = "    "
 PROFILE = False # enable profiling
 BUFSZ2 = True # force buffer size to be a power of 2 (modulo operations become bitwise-ands)
 
-def ceildiv(a: int, b: int) -> int:
-    return -(a // -b)
+def line(s: str, indent: int = 0) -> str:
+    return f"{TAB*indent}{s}\n"
 
 def hexlit(value: int, word_size: int) -> str:
     return f"{value:#0{(word_size // 8) * 2 + 2}x}"
 
-def line(s: str, indent: int = 0) -> str:
-    return f"{TAB*indent}{s}\n"
+# The following is the structure of the future, global, and until functions:
+# 1. Shift all words in the buffer by the lower bound.
+#   a. If the lower bound is a multiple of the word size, then the words of the buffer are all shifted. 
+#   b. Otherwise, each word is shifted by the lower bound and the next word is shifted by the remaining bits.
+# 2. Shift and compute the buffer up to the largest power of two less than the upper bound.
+#   a. If the upper bound is smaller than the word size, then the words of the buffer are all shifted.
+# 3 .Shift and compute the buffer by the remaining amount of the interval.
+
+def gen_future_code(word_size: int, buffer_size: int) -> str:
+    log_word_size = int(math.log2(word_size))
+    return f"""uint{word_size}_t future(uint{word_size}_t *a, uint{word_size}_t *buf, uint64_t nbuf, uint64_t word, uint64_t word_wpd, uint64_t lb, uint64_t ub) 
+{{
+    uint64_t i, j;
+    for(i = 0; i < nbuf; ++i) {{
+        buf[i] = ((lb & {word_size - 1}) == 0) ?
+            a[(word - word_wpd + i + (lb >> {log_word_size})) % {buffer_size}] :
+            (
+                (a[(word - word_wpd + i + (lb >> {log_word_size})) % {buffer_size}] << (lb & {word_size - 1})) | 
+                (a[(word - word_wpd + i + (lb >> {log_word_size}) + 1) % {buffer_size}] >> ({word_size} - (lb & {word_size - 1})))
+            );
+    }}
+
+    for(j = 1; j <= (({word_size // 2} < ((ub - lb + 1) >> 1)) ? {word_size // 2} : (ub - lb + 1) >> 1); j <<= 1) {{
+        for(i = 0; i < nbuf - 1; ++i) {{
+            buf[i] |= (buf[i] << j) | (buf[i+1] >> ({word_size} - j));
+        }}
+        buf[i] |= buf[i] << j;
+    }}
+
+    for(; j <= (ub - lb + 1) >> 1; j <<= 1) {{
+        for(i = 0; (i + (j >> {log_word_size})) < nbuf; ++i) {{
+            buf[i] |= buf[i + (j >> {log_word_size})];
+        }}
+    }}
+
+    if (((ub - lb + 1) & (j - 1)) != 0) {{
+        uint64_t leftover_shift = (ub - lb + 1) & (j - 1);
+        for(i = 0; i < nbuf; ++i) {{ 
+            buf[i] |= ((leftover_shift & {word_size - 1}) == 0) ?
+                buf[i + (leftover_shift >> {log_word_size})] :
+                (buf[i] << leftover_shift) | (buf[i+1] >> ({word_size} - leftover_shift));
+        }}
+    }} 
+  
+  return buf[0];
+}}
+"""
+
+def gen_future_code_incremental(word_size: int, buffer_size: int) -> str:
+    log_word_size = int(math.log2(word_size))
+    return f"""uint{word_size}_t future(uint{word_size}_t *a, uint{word_size}_t *buf, uint64_t nbuf, uint64_t word, uint64_t word_wpd, uint64_t lb, uint64_t ub) 
+{{
+    uint64_t i, j;
+    for(i = 0; i < nbuf; ++i) {{
+        buf[i] = ((lb & {word_size - 1}) == 0) ?
+            a[(word - word_wpd + i + (lb >> {log_word_size})) % {buffer_size}] :
+            (
+                (a[(word - word_wpd + i + (lb >> {log_word_size})) % {buffer_size}] << (lb & {word_size - 1})) | 
+                (a[(word - word_wpd + i + (lb >> {log_word_size}) + 1) % {buffer_size}] >> ({word_size} - (lb & {word_size - 1})))
+            );
+    }}
+
+    for(j = 1; j <= (({word_size // 2} < ((ub - lb + 1) >> 1)) ? {word_size // 2} : (ub - lb + 1) >> 1); j <<= 1) {{
+        for(i = 0; i < nbuf - 1; ++i) {{
+            buf[i] |= (buf[i] << j) | (buf[i+1] >> ({word_size} - j));
+        }}
+        buf[i] |= buf[i] << j;
+    }}
+
+    for(; j <= (ub - lb + 1) >> 1; j <<= 1) {{
+        for(i = 0; (i + (j >> {log_word_size})) < nbuf; ++i) {{
+            buf[i] |= buf[i + (j >> {log_word_size})];
+        }}
+    }}
+
+    if (((ub - lb + 1) & (j - 1)) != 0) {{
+        uint64_t leftover_shift = (ub - lb + 1) & (j - 1);
+        for(i = 0; i < nbuf; ++i) {{ 
+            buf[i] |= ((leftover_shift & {word_size - 1}) == 0) ?
+                buf[i + (leftover_shift >> {log_word_size})] :
+                (buf[i] << leftover_shift) | (buf[i+1] >> ({word_size} - leftover_shift));
+        }}
+    }} 
+  
+  return buf[0];
+}}
+"""
+
+def gen_global_code(word_size: int, buffer_size: int) -> str:
+    log_word_size = int(math.log2(word_size))
+    return f"""uint{word_size}_t global(uint{word_size}_t *a, uint{word_size}_t *buf, uint64_t nbuf, uint64_t word, uint64_t word_wpd, uint64_t lb, uint64_t ub) 
+{{
+    uint64_t i, j;
+    for(i = 0; i < nbuf; ++i) {{
+        buf[i] = ((lb & {word_size - 1}) == 0) ?
+            a[(word - word_wpd + i + (lb >> {log_word_size})) % {buffer_size}] :
+            (
+                (a[(word - word_wpd + i + (lb >> {log_word_size})) % {buffer_size}] << (lb & {word_size - 1})) | 
+                (a[(word - word_wpd + i + (lb >> {log_word_size}) + 1) % {buffer_size}] >> ({word_size} - (lb & {word_size - 1})))
+            );
+    }}
+
+    for(j = 1; j <= (({word_size // 2} < ((ub - lb + 1) >> 1)) ? {word_size // 2} : (ub - lb + 1) >> 1); j <<= 1) {{
+        for(i = 0; i < nbuf - 1; ++i) {{
+            buf[i] &= (buf[i] << j) | (buf[i+1] >> ({word_size} - j));
+        }}
+        buf[i] &= buf[i] << j;
+    }}
+
+    for(; j <= (ub - lb + 1) >> 1; j <<= 1) {{
+        for(i = 0; (i + (j >> {log_word_size})) < nbuf; ++i) {{
+            buf[i] &= buf[i + (j >> {log_word_size})];
+        }}
+    }}
+
+    if (((ub - lb + 1) & (j - 1)) != 0) {{
+        uint64_t leftover_shift = (ub - lb + 1) & (j - 1);
+        for(i = 0; i < nbuf; ++i) {{ 
+            buf[i] &= ((leftover_shift & {word_size - 1}) == 0) ?
+                buf[i + (leftover_shift >> {log_word_size})] :
+                (buf[i] << leftover_shift) | (buf[i+1] >> ({word_size} - leftover_shift));
+        }}
+    }} 
+    
+    return buf[0];
+}}
+"""
+
+def gen_until_code(word_size: int, buffer_size: int) -> str:
+    log_word_size = int(math.log2(word_size))
+    return f"""uint{word_size}_t until(uint{word_size}_t *a1, uint{word_size}_t *a2, uint{word_size}_t *buf1, uint{word_size}_t *buf2, uint64_t nbuf, uint64_t word, uint64_t word_wpd, uint64_t lb, uint64_t ub) 
+{{
+    uint64_t i, j;
+    for(i = 0; i < nbuf; ++i) {{
+        buf1[i] = ((lb & {word_size - 1}) == 0) ?
+            a1[(word - word_wpd + i + (lb >> {log_word_size})) % {buffer_size}] :
+            (
+                (a1[(word - word_wpd + i + (lb >> {log_word_size})) % {buffer_size}] << (lb & {word_size - 1})) | 
+                (a1[(word - word_wpd + i + (lb >> {log_word_size}) + 1) % {buffer_size}] >> ({word_size} - (lb & {word_size - 1})))
+            );
+        buf2[i] = ((lb & {word_size - 1}) == 0) ?
+            a2[(word - word_wpd + i + (lb >> {log_word_size})) % {buffer_size}] :
+            (
+                (a2[(word - word_wpd + i + (lb >> {log_word_size})) % {buffer_size}] << (lb & {word_size - 1})) | 
+                (a2[(word - word_wpd + i + (lb >> {log_word_size}) + 1) % {buffer_size}] >> ({word_size} - (lb & {word_size - 1})))
+            );
+    }}
+
+    for(j = 1; j <= (({word_size // 2} < ((ub + 1) >> 1)) ? {word_size // 2} : (ub + 1) >> 1); j <<= 1) {{
+        for(i = 0; i < nbuf - 1; ++i) {{
+            buf2[i] |= buf1[i] & ((buf2[i] << j) | (buf2[i+1] >> ({word_size} - j)));
+            buf1[i] &= (buf1[i] << j) | (buf1[i+1] >> ({word_size} - j));
+        }}
+        buf2[nbuf - 1] |= buf1[nbuf - 1] & (buf2[nbuf - 1] << j);
+        buf1[nbuf - 1] &= buf1[nbuf - 1] << j;
+    }}
+
+    for(; j <= (ub + 1) >> 1; j <<= 1) {{
+        for(i = 0; (i + (j >> {log_word_size})) < nbuf; ++i) {{
+            buf2[i] |= buf1[i] & buf2[i + (j >> {log_word_size})];
+            buf1[i] &= buf1[i + (j >> {log_word_size})];
+        }}
+    }}
+
+    if (((ub - lb + 1) & (j - 1)) != 0) {{
+        uint64_t leftover_shift = (ub - lb + 1) & (j - 1);
+        for(i = 0; i < nbuf; ++i) {{ 
+            buf2[i] |= ((leftover_shift & {word_size - 1}) == 0) ?
+                buf1[i] & buf2[i + (leftover_shift >> {log_word_size})] :
+                buf1[i] & ((buf2[i] << leftover_shift) | (buf2[i+1] >> ({word_size} - leftover_shift)));
+            buf1[i] &= ((leftover_shift & {word_size - 1}) == 0) ?
+                buf1[i + (leftover_shift >> {log_word_size})] :
+                (buf1[i] << leftover_shift) | (buf1[i+1] >> ({word_size} - leftover_shift));
+        }}
+    }} 
+
+    return buf2[0];
+}}
+"""
 
 def gen_code(formula: cpt.Expression, context: cpt.Context) -> str:
     word_size = context.options.sabre_word_size
@@ -39,10 +216,13 @@ def gen_code(formula: cpt.Expression, context: cpt.Context) -> str:
             indent: int = 2,
         ) -> str:
         nonlocal word_size
-        # check is expr is true/false
-        if isinstance(expr, cpt.Constant) and expr.value in [True, False]:
+        if isinstance(expr, cpt.Constant) and expr.value:
             return line(
-                f"{fid[expr]}[({tau} - {word_wpd[expr]}) % {size[expr]}] = {int(expr.value)};", indent
+                f"{fid[expr]}[({tau} - {word_wpd[expr]}) % {size[expr]}] = {hexlit(2**word_size - 1, word_size)};", indent
+            )
+        elif isinstance(expr, cpt.Constant) and not expr.value:
+            return line(
+                f"{fid[expr]}[({tau} - {word_wpd[expr]}) % {size[expr]}] = {hexlit(0, word_size)};", indent
             )
         if cpt.is_operator(expr, cpt.OperatorKind.LOGICAL_NEGATE):
             return line(
@@ -172,139 +352,9 @@ int read_inputs(FILE *f, int (*abuf)[{nsigs}], uint{word_size}_t (*atomics)[{nsi
 }}
 """
 
-    # The following is the structure of the future, global, and until functions:
-    # 1. Shift all words in the buffer by the lower bound.
-    #   a. If the lower bound is a multiple of the word size, then the words of the buffer are all shifted. 
-    #   b. Otherwise, each word is shifted by the lower bound and the next word is shifted by the remaining bits.
-    # 2. Shift and compute the buffer up to the largest power of two less than the upper bound.
-    #   a. If the upper bound is smaller than the word size, then the words of the buffer are all shifted.
-    # 3 .Shift and compute the buffer by the remaining amount of the interval.
-    
-    log_word_size = int(math.log2(word_size))
-    code += f"""
-uint{word_size}_t future(uint{word_size}_t *a, uint{word_size}_t *buf, uint64_t nbuf, uint64_t word, uint64_t word_wpd, uint64_t lb, uint64_t ub) 
-{{
-    uint64_t i, j;
-    for(i = 0; i < nbuf; ++i) {{
-        buf[i] = ((lb & {word_size - 1}) == 0) ?
-            a[(word - word_wpd + i + (lb >> {log_word_size})) % {size[formula]}] :
-            (
-                (a[(word - word_wpd + i + (lb >> {log_word_size})) % {size[formula]}] << (lb & {word_size - 1})) | 
-                (a[(word - word_wpd + i + (lb >> {log_word_size}) + 1) % {size[formula]}] >> ({word_size} - (lb & {word_size - 1})))
-            );
-    }}
-
-    for(j = 1; j <= (({word_size // 2} < ((ub - lb + 1) >> 1)) ? {word_size // 2} : (ub - lb + 1) >> 1); j <<= 1) {{
-        for(i = 0; i < nbuf - 1; ++i) {{
-            buf[i] |= (buf[i] << j) | (buf[i+1] >> ({word_size} - j));
-        }}
-        buf[i] |= buf[i] << j;
-    }}
-
-    for(; j <= (ub - lb + 1) >> 1; j <<= 1) {{
-        for(i = 0; (i + (j >> {log_word_size})) < nbuf; ++i) {{
-            buf[i] |= buf[i + (j >> {log_word_size})];
-        }}
-    }}
-
-    if (((ub - lb + 1) & (j - 1)) != 0) {{
-        uint64_t leftover_shift = (ub - lb + 1) & (j - 1);
-        for(i = 0; i < nbuf; ++i) {{ 
-            buf[i] |= ((leftover_shift & {word_size - 1}) == 0) ?
-                buf[i + (leftover_shift >> {log_word_size})] :
-                (buf[i] << leftover_shift) | (buf[i+1] >> ({word_size} - leftover_shift));
-        }}
-    }} 
-  
-  return buf[0];
-}}
-
-uint{word_size}_t global(uint{word_size}_t *a, uint{word_size}_t *buf, uint64_t nbuf, uint64_t word, uint64_t word_wpd, uint64_t lb, uint64_t ub) 
-{{
-    uint64_t i, j;
-    for(i = 0; i < nbuf; ++i) {{
-        buf[i] = ((lb & {word_size - 1}) == 0) ?
-            a[(word - word_wpd + i + (lb >> {log_word_size})) % {size[formula]}] :
-            (
-                (a[(word - word_wpd + i + (lb >> {log_word_size})) % {size[formula]}] << (lb & {word_size - 1})) | 
-                (a[(word - word_wpd + i + (lb >> {log_word_size}) + 1) % {size[formula]}] >> ({word_size} - (lb & {word_size - 1})))
-            );
-    }}
-
-    for(j = 1; j <= (({word_size // 2} < ((ub - lb + 1) >> 1)) ? {word_size // 2} : (ub - lb + 1) >> 1); j <<= 1) {{
-        for(i = 0; i < nbuf - 1; ++i) {{
-            buf[i] &= (buf[i] << j) | (buf[i+1] >> ({word_size} - j));
-        }}
-        buf[i] &= buf[i] << j;
-    }}
-
-    for(; j <= (ub - lb + 1) >> 1; j <<= 1) {{
-        for(i = 0; (i + (j >> {log_word_size})) < nbuf; ++i) {{
-            buf[i] &= buf[i + (j >> {log_word_size})];
-        }}
-    }}
-
-    if (((ub - lb + 1) & (j - 1)) != 0) {{
-        uint64_t leftover_shift = (ub - lb + 1) & (j - 1);
-        for(i = 0; i < nbuf; ++i) {{ 
-            buf[i] &= ((leftover_shift & {word_size - 1}) == 0) ?
-                buf[i + (leftover_shift >> {log_word_size})] :
-                (buf[i] << leftover_shift) | (buf[i+1] >> ({word_size} - leftover_shift));
-        }}
-    }} 
-    
-    return buf[0];
-}}
-
-uint{word_size}_t until(uint{word_size}_t *a1, uint{word_size}_t *a2, uint{word_size}_t *buf1, uint{word_size}_t *buf2, uint64_t nbuf, uint64_t word, uint64_t word_wpd, uint64_t lb, uint64_t ub) 
-{{
-    uint64_t i, j;
-    for(i = 0; i < nbuf; ++i) {{
-        buf1[i] = ((lb & {word_size - 1}) == 0) ?
-            a1[(word - word_wpd + i + (lb >> {log_word_size})) % {size[formula]}] :
-            (
-                (a1[(word - word_wpd + i + (lb >> {log_word_size})) % {size[formula]}] << (lb & {word_size - 1})) | 
-                (a1[(word - word_wpd + i + (lb >> {log_word_size}) + 1) % {size[formula]}] >> ({word_size} - (lb & {word_size - 1})))
-            );
-        buf2[i] = ((lb & {word_size - 1}) == 0) ?
-            a2[(word - word_wpd + i + (lb >> {log_word_size})) % {size[formula]}] :
-            (
-                (a2[(word - word_wpd + i + (lb >> {log_word_size})) % {size[formula]}] << (lb & {word_size - 1})) | 
-                (a2[(word - word_wpd + i + (lb >> {log_word_size}) + 1) % {size[formula]}] >> ({word_size} - (lb & {word_size - 1})))
-            );
-    }}
-
-    for(j = 1; j <= (({word_size // 2} < ((ub + 1) >> 1)) ? {word_size // 2} : (ub + 1) >> 1); j <<= 1) {{
-        for(i = 0; i < nbuf - 1; ++i) {{
-            buf2[i] |= buf1[i] & ((buf2[i] << j) | (buf2[i+1] >> ({word_size} - j)));
-            buf1[i] &= (buf1[i] << j) | (buf1[i+1] >> ({word_size} - j));
-        }}
-        buf2[nbuf - 1] |= buf1[nbuf - 1] & (buf2[nbuf - 1] << j);
-        buf1[nbuf - 1] &= buf1[nbuf - 1] << j;
-    }}
-
-    for(; j <= (ub + 1) >> 1; j <<= 1) {{
-        for(i = 0; (i + (j >> {log_word_size})) < nbuf; ++i) {{
-            buf2[i] |= buf1[i] & buf2[i + (j >> {log_word_size})];
-            buf1[i] &= buf1[i + (j >> {log_word_size})];
-        }}
-    }}
-
-    if (((ub - lb + 1) & (j - 1)) != 0) {{
-        uint64_t leftover_shift = (ub - lb + 1) & (j - 1);
-        for(i = 0; i < nbuf; ++i) {{ 
-            buf2[i] |= ((leftover_shift & {word_size - 1}) == 0) ?
-                buf1[i] & buf2[i + (leftover_shift >> {log_word_size})] :
-                buf1[i] & ((buf2[i] << leftover_shift) | (buf2[i+1] >> ({word_size} - leftover_shift)));
-            buf1[i] &= ((leftover_shift & {word_size - 1}) == 0) ?
-                buf1[i + (leftover_shift >> {log_word_size})] :
-                (buf1[i] << leftover_shift) | (buf1[i+1] >> ({word_size} - leftover_shift));
-        }}
-    }} 
-
-    return buf2[0];
-}}
-"""
+    code += gen_future_code(word_size, size[formula])
+    code += gen_global_code(word_size, size[formula])
+    code += gen_until_code(word_size, size[formula])
 
     code += """
 int main(int argc, char const *argv[]) 
@@ -316,7 +366,7 @@ int main(int argc, char const *argv[])
     for expr in cpt.postorder(formula, context):
         if isinstance(expr, cpt.Signal):
             continue
-        code += line(f"uint{word_size}_t {fid[expr]}[{size[expr]}] = {{0}};", 1)
+        code += line(f"uint{word_size}_t {fid[expr]}[{size[expr]}] = {{0}}; // {expr}", 1)
     code += "\n"
 
     for expr in cpt.postorder(formula, context):
@@ -363,7 +413,7 @@ int main(int argc, char const *argv[])
             """ + 
             f'\n{TAB*3}'.join([f'atomics[{i}][word % {size[formula]}] = (atomics[{i}][word % {size[formula]}] << 1) | (abuf[{i}] == 1);' for i in range(nsigs)]) + """
         }
-    """)
+""")
 
     if PROFILE:
          code += line(f"gettimeofday(&start[word % {size[formula]}], NULL);", 0)
@@ -371,7 +421,7 @@ int main(int argc, char const *argv[])
     for expr in cpt.postorder(formula, context):
         if isinstance(expr, cpt.Signal):
             continue
-        code += gen_compute_expr_code_func(expr, fid, size, word_wpd, buffer_size, "word", 1)
+        code += gen_compute_expr_code_func(expr, fid, size, word_wpd, buffer_size, "word", 2)
         # if debug:
         #     code += "#ifdef DEBUG\n"
         #     code += (
@@ -402,5 +452,4 @@ int main(int argc, char const *argv[])
 }
 """
 
-    print(code)
     return code
